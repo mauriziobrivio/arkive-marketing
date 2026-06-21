@@ -63,11 +63,16 @@ function captureInPage() {
     .replace(/url\(\s*(['"]?)(?!https?:|data:|#)([^'")]+)\1\s*\)/gi, (m, q, u) => `url("${absUrl(u)}")`);
   const scripts = [...document.querySelectorAll('script')].map(s => ({ src: s.src || null, type: s.type || '', inline: s.src ? null : s.textContent }));
 
+  // Bake the body's RESOLVED background (color + paper texture). The original rule lives in a
+  // sheet whose body-background didn't survive inlining; computed values are already absolute.
+  const _bs = getComputedStyle(document.body);
+  const bodyBg = { color: _bs.backgroundColor, image: _bs.backgroundImage, repeat: _bs.backgroundRepeat, size: _bs.backgroundSize, position: _bs.backgroundPosition, attachment: _bs.backgroundAttachment };
+
   return {
     lang: document.documentElement.lang || 'en',
     rootStyle: document.documentElement.getAttribute('style') || '', // post-applyTweaks design tokens
     bodyClass: document.body.className || '',
-    headLinks, crossLinks, inlinedCss, bodyHTML, scripts,
+    headLinks, crossLinks, inlinedCss, bodyHTML, scripts, bodyBg,
   };
 }
 
@@ -92,6 +97,8 @@ function rebuildScripts(scripts) {
 function compose(data, { keepJs = true } = {}) {
   const links = (data.headLinks || []).concat(data.crossLinks || []).join('\n');
   const scripts = keepJs ? rebuildScripts(data.scripts || []) : '';
+  const bg = data.bodyBg || {};
+  const bodyBgCss = bg.color ? `\n/* prerender: baked computed body background (color + texture) */\nbody{background-color:${bg.color};background-image:${bg.image};background-repeat:${bg.repeat};background-size:${bg.size};background-position:${bg.position};background-attachment:${bg.attachment};}\n` : '';
   return `<!doctype html>
 <html lang="${data.lang || 'en'}" style="${(data.rootStyle || '').replace(/"/g, '&quot;')}">
 <head>
@@ -100,7 +107,7 @@ function compose(data, { keepJs = true } = {}) {
 ${SEO_HEAD.trim()}
 ${links}
 <style>
-${data.inlinedCss || ''}${REVEAL_FIX}</style>
+${data.inlinedCss || ''}${bodyBgCss}${REVEAL_FIX}</style>
 </head>
 <body class="${data.bodyClass || ''}">
 ${data.bodyHTML || ''}
