@@ -1,6 +1,6 @@
 # Arkive marketing — Netlify config (Phase 1: preview only, no production cutover)
 [build]
-  command = "npm ci && npx playwright install --with-deps chromium && npm run build"
+  command = "npm install && npx playwright install --with-deps chromium && npm run build"
   publish = "dist"
 
 [build.environment]
