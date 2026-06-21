@@ -1,155 +1,145 @@
 /**
- * Arkive marketing — prerender pipeline (Phase 1)
- * --------------------------------------------------------------------------
- * WHAT IT DOES
- *   Loads the claude.ai/design bundle in a real headless Chromium, waits for
- *   React to finish rendering, then SERIALIZES the final DOM to static HTML so
- *   the H1 + all section copy live in the HTML source (crawlable / AI-citable).
- *   Pixels stay exact because we keep the bundle's own CSS + fonts verbatim.
+ * Arkive marketing — prerender pipeline (Phase 1 · self-contained fidelity build)
+ * --------------------------------------------------------------------------------
+ * Renders the claude.ai/design bundle in headless Chromium and serializes a FULLY
+ * SELF-CONTAINED static page: content in the HTML source (crawlable) AND pixel-correct
+ * with JavaScript disabled. No external CSS, no runtime JS required to look right.
  *
- *   It also:
- *     - injects the SEO/GEO <head> (seo/head.html)
- *     - STRIPS the tweaks-panel / EDITMODE editor from the output
- *     - swaps React *development* builds -> *production* builds (perf)
- *     - re-attaches the app's interactivity scripts so the page stays live
- *     - copies static/ (robots.txt, sitemap.xml) into dist/
+ * Fidelity fixes (vs the first build):
+ *   1. INLINE all same-origin stylesheets (styles.css + the head <style>) into one <style>;
+ *      keep cross-origin sheets (Google Fonts) as absolute <link>s.
+ *   2. BAKE the post-applyTweaks design tokens — the :root custom properties applyTweaks
+ *      writes onto <html> at runtime (--bg, --ink, --serif, --gap, …) — statically onto <html>.
+ *   3. ABSOLUTIZE every relative asset URL (CSS url(), img src/srcset, etc.) to the SOURCE origin.
+ *   4. FORCE entrance-reveal elements to their final shown state (.reveal is opacity:0 until a
+ *      JS scroll-observer flips it — invisible with JS off). A tiny override bakes the shown state.
  *
- * WHY A SCRIPT (not a pre-built index.html in this repo)
- *   Prerendering must run where the bundle is reachable (your machine / CI /
- *   Netlify build). Point SOURCE at the existing preview or a local server.
- *
- * RUN
- *   npm ci && npx playwright install chromium
- *   SOURCE=https://arkive-preview.netlify.app node scripts/prerender.mjs
- *   # output -> dist/index.html  (+ dist/robots.txt, dist/sitemap.xml)
- * --------------------------------------------------------------------------
+ * Layout: flattened repo (head.html, robots.txt, sitemap.xml at root; build = node prerender.mjs).
+ * RUN:  SOURCE=https://arkive-preview.netlify.app node prerender.mjs   → dist/index.html
+ * --------------------------------------------------------------------------------
  */
-import { chromium } from 'playwright';
-import { readFileSync, mkdirSync, writeFileSync, cpSync, existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, cpSync, existsSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = __dirname;
+const ROOT = dirname(fileURLToPath(import.meta.url)); // flattened: assets live beside this file
 
-// ---- Config (override via env) -------------------------------------------
 const SOURCE        = process.env.SOURCE || 'https://arkive-preview.netlify.app';
-const CANONICAL     = process.env.CANONICAL_PAGE || '/desktop.html'; // canonical crawlable page
-const ALSO_MOBILE   = process.env.ALSO_MOBILE === '1';               // optionally emit /m/
+const CANONICAL_PAGE= process.env.CANONICAL_PAGE || '/desktop.html';
 const OUT_DIR       = resolve(ROOT, process.env.OUT_DIR || 'dist');
+const KEEP_JS       = process.env.KEEP_JS !== '0';   // re-attach app JS (optional); page is correct without it
 const VIEWPORT      = { width: 1440, height: 900 };
-// Scripts to DROP from production output (the design-time editor):
-const STRIP_SCRIPT_MATCH = [/tweaks-panel/i, /tweak/i];
-// dev -> prod React swap:
-const REACT_SWAP = [
-  [/react\.development\.js/g, 'react.production.min.js'],
-  [/react-dom\.development\.js/g, 'react-dom.production.min.js'],
-];
+const SEO_HEAD      = readFileSync(resolve(ROOT, 'head.html'), 'utf8');
 
-const SEO_HEAD = readFileSync(resolve(ROOT, 'head.html'), 'utf8');
+// Entrance-reveal elements (.reveal) are opacity:0 + transform until a JS scroll-observer
+// flips them. With JS off they'd be invisible — force their final shown state statically.
+// (opacity/transform only — never `display`, so JS-gated modals stay hidden.)
+const REVEAL_FIX = '\n/* prerender: force entrance-reveal elements to final shown state (JS-off fidelity) */\n.reveal{opacity:1 !important;transform:none !important;}\n';
 
-async function renderPage(browser, pagePath) {
-  const page = await browser.newPage({ viewport: VIEWPORT });
-  const url = SOURCE.replace(/\/$/, '') + pagePath;
-  console.log('→ rendering', url);
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+/* Runs INSIDE the page (post-render, after applyTweaks). Captures a self-contained snapshot. */
+function captureInPage() {
+  const ORIGIN = location.origin;
+  const absUrl = u => { u = String(u).trim().replace(/^['"]|['"]$/g, '');
+    if (/^(https?:|data:|#|mailto:|tel:)/i.test(u)) return u;
+    if (u.startsWith('//')) return 'https:' + u;
+    if (u.startsWith('/')) return ORIGIN + u;
+    return ORIGIN + '/' + u; };
+  const absCss = css => css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g,
+    (m, q, u) => /^(data:|#)/i.test(u.trim()) ? m : `url("${absUrl(u)}")`);
 
-  // Wait for React to populate #root, then for fonts + a short settle.
-  await page.waitForFunction(
-    () => { const r = document.querySelector('#root'); return r && r.children.length > 0 && document.body.innerText.length > 1000; },
-    { timeout: 30000 }
-  );
-  await page.evaluate(() => document.fonts && document.fonts.ready);
-  await page.waitForTimeout(800);
+  let inlinedCss = ''; const crossLinks = [];
+  for (const ss of document.styleSheets) {
+    if (ss.href && !ss.href.startsWith(ORIGIN)) { const el = ss.ownerNode; if (el) crossLinks.push(el.outerHTML); continue; }
+    try { inlinedCss += '\n' + [...ss.cssRules].map(r => r.cssText).join('\n'); }
+    catch (e) { const el = ss.ownerNode; if (el && el.tagName === 'LINK') crossLinks.push(el.outerHTML); } // cross-origin → keep as <link>
+  }
+  inlinedCss = absCss(inlinedCss);
 
-  const data = await page.evaluate(() => {
-    // Defensive: remove any tweaks/editor UI that happens to be in the DOM.
-    document.querySelectorAll('[id*="tweak" i],[class*="tweak" i],[id^="__TWEAKS"],[class*="editmode" i]').forEach(e => e.remove());
-    const headStyleLinks = [...document.head.querySelectorAll('style,link')]
-      .map(e => e.outerHTML)
-      .filter(h => !/__TWEAKS/i.test(h));         // keep design CSS + fonts; drop tweak styles
-    const scripts = [...document.querySelectorAll('script')].map(s => ({
-      src: s.src || null,
-      inline: s.src ? null : s.textContent,
-    }));
-    return {
-      lang: document.documentElement.lang || 'en',
-      bodyClass: document.body.className || '',
-      headStyleLinks,
-      bodyHTML: document.body.innerHTML,
-      scripts,
-    };
-  });
-  await page.close();
-  return data;
+  const headLinks = [...document.head.querySelectorAll('link[rel=preconnect],link[href*="googleapis"],link[href*="gstatic"]')].map(l => l.outerHTML);
+  const bclone = document.body.cloneNode(true);
+  bclone.querySelectorAll('script,[id*="tweak" i],[class*="tweak" i]').forEach(s => s.remove());
+  const bodyHTML = bclone.innerHTML
+    .replace(/(\s(?:src|href|poster|srcset)=)(['"])(?!https?:|data:|#|\/\/|mailto:|tel:)([^'"]+)\2/gi, (m, p, q, u) => p + q + absUrl(u) + q)
+    .replace(/url\(\s*(['"]?)(?!https?:|data:|#)([^'")]+)\1\s*\)/gi, (m, q, u) => `url("${absUrl(u)}")`);
+  const scripts = [...document.querySelectorAll('script')].map(s => ({ src: s.src || null, type: s.type || '', inline: s.src ? null : s.textContent }));
+
+  return {
+    lang: document.documentElement.lang || 'en',
+    rootStyle: document.documentElement.getAttribute('style') || '', // post-applyTweaks design tokens
+    bodyClass: document.body.className || '',
+    headLinks, crossLinks, inlinedCss, bodyHTML, scripts,
+  };
 }
 
 function rebuildScripts(scripts) {
-  // Drop the tweaks editor; swap dev->prod React; keep everything else so the
-  // page stays interactive. (Full JSX precompile + Babel removal = deferred, see README.)
+  const STRIP = [/tweaks-panel/i, /tweak/i];
+  const SWAP = [[/react\.development\.js/g, 'react.production.min.js'], [/react-dom\.development\.js/g, 'react-dom.production.min.js']];
   const out = [];
   for (const s of scripts) {
     if (s.src) {
-      if (STRIP_SCRIPT_MATCH.some(rx => rx.test(s.src))) { console.log('  - stripped script', s.src); continue; }
-      let src = s.src;
-      for (const [rx, rep] of REACT_SWAP) src = src.replace(rx, rep);
+      if (STRIP.some(rx => rx.test(s.src))) continue;           // drop the design-time editor
+      let src = s.src; for (const [rx, rep] of SWAP) src = src.replace(rx, rep);
       const type = /\.jsx(\?|$)/.test(src) ? ' type="text/babel"' : '';
       out.push(`<script${type} src="${src}" crossorigin></script>`);
     } else if (s.inline) {
-      if (/TweaksPanel|useTweaks|__TWEAKS/.test(s.inline) && s.inline.length < 4000) { console.log('  - stripped small inline tweak script'); continue; }
-      const isBabel = /</.test(s.inline) && /react|jsx|=>|function/i.test(s.inline);
-      out.push(`<script${isBabel ? ' type="text/babel"' : ''}>${s.inline}</script>`);
+      if (/TweaksPanel|useTweaks|__TWEAKS/.test(s.inline) && s.inline.length < 4000) continue;
+      out.push(`<script${/text\/babel/.test(s.type) ? ' type="text/babel"' : ''}>${s.inline}</script>`);
     }
   }
   return out.join('\n');
 }
 
-function compose(data) {
-  const head = data.headStyleLinks.filter(h => !/__TWEAKS/i.test(h)).join('\n'); // drop injected tweak <style> (id-anchored; never the design CSS)
-  const scripts = rebuildScripts(data.scripts);
+function compose(data, { keepJs = true } = {}) {
+  const links = (data.headLinks || []).concat(data.crossLinks || []).join('\n');
+  const scripts = keepJs ? rebuildScripts(data.scripts || []) : '';
   return `<!doctype html>
-<html lang="${data.lang}">
+<html lang="${data.lang || 'en'}" style="${(data.rootStyle || '').replace(/"/g, '&quot;')}">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 ${SEO_HEAD.trim()}
-${head}
+${links}
+<style>
+${data.inlinedCss || ''}${REVEAL_FIX}</style>
 </head>
-<body class="${data.bodyClass}">
-${data.bodyHTML}
+<body class="${data.bodyClass || ''}">
+${data.bodyHTML || ''}
 ${scripts}
 </body>
 </html>
 `;
 }
 
-async function main(){
-  mkdirSync(OUT_DIR, { recursive: true });
-  const browser = await chromium.launch();
-
-  const desktop = await renderPage(browser, CANONICAL);
-  writeFileSync(resolve(OUT_DIR, 'index.html'), compose(desktop));
-  console.log('✓ wrote dist/index.html  (body chars:', desktop.bodyHTML.length + ')');
-
-  if (ALSO_MOBILE) {
-    const mobile = await renderPage(browser, '/mobile.html');
-    mkdirSync(resolve(OUT_DIR, 'm'), { recursive: true });
-    writeFileSync(resolve(OUT_DIR, 'm/index.html'), compose(mobile));
-    console.log('✓ wrote dist/m/index.html');
-  }
-
-  await browser.close();
-
-  // Copy static assets (robots.txt, sitemap.xml, og-image.png if present).
-  for (const f of ['robots.txt', 'sitemap.xml', 'og-image.png']) {
-    const src = resolve(ROOT, f);
-    if (existsSync(src)) cpSync(src, resolve(OUT_DIR, f));
-  }
-  console.log('✓ copied static assets → dist/');
-  console.log('\nDONE. Acceptance: open dist/index.html with JS disabled — H1 + all copy must be visible.');
+async function renderPage(browser, pagePath) {
+  const page = await browser.newPage({ viewport: VIEWPORT });
+  const url = SOURCE.replace(/\/$/, '') + pagePath;
+  console.log('→ rendering', url);
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForFunction(() => { const r = document.querySelector('#root'); return r && r.children.length > 0 && document.body.innerText.length > 1000; }, { timeout: 30000 });
+  // wait until applyTweaks has written the :root design tokens onto <html>
+  await page.waitForFunction(() => /--bg|--ink|--serif/.test(document.documentElement.getAttribute('style') || ''), { timeout: 15000 })
+    .catch(() => console.warn('  ⚠ design tokens not detected on <html> — check applyTweaks timing'));
+  await page.evaluate(() => document.fonts && document.fonts.ready);
+  await page.waitForTimeout(1000);
+  const data = await page.evaluate(captureInPage);
+  await page.close();
+  return data;
 }
 
-export { compose, rebuildScripts, main };
+async function main() {
+  mkdirSync(OUT_DIR, { recursive: true });
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch();
+  const desktop = await renderPage(browser, CANONICAL_PAGE);
+  writeFileSync(resolve(OUT_DIR, 'index.html'), compose(desktop, { keepJs: KEEP_JS }));
+  console.log(`✓ dist/index.html  (inlined CSS ${desktop.inlinedCss.length} · body ${desktop.bodyHTML.length} chars · JS ${KEEP_JS ? 'kept (optional)' : 'dropped'})`);
+  await browser.close();
+  for (const f of ['robots.txt', 'sitemap.xml', 'og-image.png']) {
+    const src = resolve(ROOT, f); if (existsSync(src)) cpSync(src, resolve(OUT_DIR, f));
+  }
+  console.log('✓ copied static assets → dist/\nDONE. Open dist/index.html with JS disabled — hero + all copy must be visible AND fully styled.');
+}
 
+export { compose, rebuildScripts, captureInPage, REVEAL_FIX };
 const isDirect = process.argv[1] && process.argv[1].endsWith('prerender.mjs');
 if (isDirect) main().catch(e => { console.error(e); process.exit(1); });
