@@ -1,0 +1,13 @@
+{
+  "name": "arkive-marketing",
+  "private": true,
+  "type": "module",
+  "description": "Arkive marketing site — prerender pipeline (design fidelity + crawlability/GEO).",
+  "scripts": {
+    "build": "node prerender.mjs",
+    "prerender": "node prerender.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.0"
+  }
+}

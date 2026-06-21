@@ -1,0 +1,18 @@
+# Arkive marketing — Netlify config (Phase 1: preview only, no production cutover)
+[build]
+  command = "npm ci && npx playwright install --with-deps chromium && npm run build"
+  publish = "dist"
+
+[build.environment]
+  SOURCE = "https://arkive-preview.netlify.app"  # where the design bundle is reachable at build time
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "SAMEORIGIN"
+
+# ⛔ DO NOT add redirects/proxies for the four deep-link routes here.
+#    /open-capsule*  /join-capsule*  /join-vault*  /relic/*
+#    Those are owned by the Cloudflare Worker + AASA (Phase 2). Netlify must never claim them.

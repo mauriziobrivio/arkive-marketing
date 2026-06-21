@@ -1,0 +1,51 @@
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://www.arkive-it.app/#organization",
+      "name": "Arkive",
+      "legalName": "Brivio",
+      "url": "https://www.arkive-it.app/",
+      "logo": "https://www.arkive-it.app/og-image.png",
+      "description": "A private, zero-knowledge time-capsule and encrypted Vault app. Send letters, photos and videos to the future, with a hardware-grade private Vault and hand-finished keepsake Relics.",
+      "foundingLocation": { "@type": "Place", "address": { "@type": "PostalAddress", "addressLocality": "Tallinn", "addressCountry": "EE" } },
+      "sameAs": [ "https://www.instagram.com/arkive_it" ]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://www.arkive-it.app/#website",
+      "url": "https://www.arkive-it.app/",
+      "name": "Arkive",
+      "publisher": { "@id": "https://www.arkive-it.app/#organization" },
+      "inLanguage": "en"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://www.arkive-it.app/#app",
+      "name": "Arkive: Time Capsules",
+      "operatingSystem": "iOS",
+      "applicationCategory": "LifestyleApplication",
+      "publisher": { "@id": "https://www.arkive-it.app/#organization" },
+      "description": "Send photos, videos, voice notes and letters to the future — sealed in a Capsule and delivered on a date you choose. Includes a bank-grade encrypted Vault and optional hand-finished Relics with an NFC card.",
+      "installUrl": "https://testflight.apple.com/join/hq2FDXsd",
+      "downloadUrl": "https://testflight.apple.com/join/hq2FDXsd",
+      "offers": [
+        { "@type": "Offer", "name": "The Reader", "price": "0", "priceCurrency": "EUR", "description": "Free — one private Capsule, up to twenty memories." },
+        { "@type": "Offer", "name": "The Keeper", "price": "119.99", "priceCurrency": "EUR", "description": "Annual membership (≈ €9.99/month)." },
+        { "@type": "Offer", "name": "Lifetime", "price": "599.99", "priceCurrency": "EUR", "description": "One-time — everything in The Keeper, kept forever." }
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "@id": "https://www.arkive-it.app/#faq",
+      "mainEntity": [
+        { "@type": "Question", "name": "What is an Arkive Capsule?", "acceptedAnswer": { "@type": "Answer", "text": "A Capsule is a small, sealed collection — photos, a voice note, a letter — that you schedule for a future date. You choose the year and the reader; it stays sealed until then." } },
+        { "@type": "Question", "name": "What is a Relic?", "acceptedAnswer": { "@type": "Answer", "text": "A Relic is a hand-finished physical keepsake made in Arkive’s atelier. It holds printed photographs and an NFC card linked to a Capsule of your choosing, so a digital memory becomes an object you can hold and pass on." } },
+        { "@type": "Question", "name": "Is the Vault private and encrypted?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. The Vault is a bank-grade encrypted archive for the present, readable only by you. Arkive is zero-knowledge — the shared phrase is the only key." } },
+        { "@type": "Question", "name": "Which devices does Arkive support?", "acceptedAnswer": { "@type": "Answer", "text": "Arkive is an iPhone app at launch." } },
+        { "@type": "Question", "name": "How much does Arkive cost?", "acceptedAnswer": { "@type": "Answer", "text": "The Reader tier is free (one Capsule, up to twenty memories). The Keeper is €119.99/year (about €9.99/month). Lifetime is a one-time €599.99." } }
+      ]
+    }
+  ]
+}
